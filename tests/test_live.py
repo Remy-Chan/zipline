@@ -7,6 +7,8 @@ from datetime import time
 from collections import defaultdict
 
 # fix to allow zip_longest on Python 2.X and 3.X
+from zipline import TradingAlgorithm
+
 try:                                    # Python 3
     from itertools import zip_longest
 except ImportError:                     # Python 2
@@ -19,6 +21,15 @@ from zipline.gens.sim_engine import MinuteSimulationClock
 
 from zipline.utils.calendars import get_calendar
 from zipline.utils.calendars.trading_calendar import days_at_time
+
+
+class TestAlgorithmState(TestCase):
+
+    def test_startup_init(self):
+        """Tests that when starting an algo initialize() is run and context saved."""
+        print("I am doing!")
+        TradingAlgorithm()
+        self.assertTrue(True)
 
 
 class TestRealtimeClock(TestCase):
