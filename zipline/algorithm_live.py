@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from datetime import time
+import os.path
 import logbook
 
 from zipline.algorithm import TradingAlgorithm
@@ -18,10 +19,12 @@ from zipline.gens.realtimeclock import RealtimeClock
 from zipline.gens.tradesimulation import AlgorithmSimulator
 from zipline.errors import OrderInBeforeTradingStart
 from zipline.utils.api_support import (
+    ZiplineAPI,
     api_method,
     disallowed_in_before_trading_start)
 
 from zipline.utils.calendars.trading_calendar import days_at_time
+from zipline.utils.persistence import persist_state, unpersist_state
 
 log = logbook.Logger("Live Trading")
 
@@ -38,7 +41,31 @@ class LiveTradingAlgorithm(TradingAlgorithm):
 
         super(self.__class__, self).__init__(*args, **kwargs)
 
+        self._state_file_path = "state.p"  #TODO: get a name
+        self._fields_prior = []
+
         log.info("initialization done")
+
+    def initialize(self, *args, **kwargs):
+        """
+        Overrides default initialize
+        """
+
+        # check if state persistance exists, if not call initialize
+        if not os.path.isfile(self._state_file_path):
+            log.info("no state file found, calling initialize")
+            with ZiplineAPI(self):
+                fields_prior = self.__dict__.keys()
+                self._initialize(self, *args, **kwargs)
+                persist_state(self._state_file_path, self, fields_prior)
+        else:
+            log.info("state file found, loading state from persistence store")
+            unpersist_state(self._state_file_path, self)
+
+    def handle_data(self, data):
+        super.handle_data(self, data)
+        log.info("handle data has been called, writing state to persistence store")
+        persist_state(self._state_file_path, self, self._fields_prior)
 
     def _create_clock(self):
         # This method is taken from TradingAlgorithm.
