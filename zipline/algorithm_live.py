@@ -32,6 +32,11 @@ from zipline.utils.api_support import (
 from zipline.utils.calendars.trading_calendar import days_at_time
 from zipline.utils.serialization_utils import load_context, store_context
 
+from zipline.pipeline.engine import (
+    ExplodingPipelineEngine,
+    SimplePipelineEngine,
+)
+
 log = logbook.Logger("Live Trading")
 
 
@@ -52,6 +57,26 @@ class LiveTradingAlgorithm(TradingAlgorithm):
         super(self.__class__, self).__init__(*args, **kwargs)
 
         log.info("initialization done")
+
+
+    def init_engine(self, get_loader):
+        """
+        Construct and store a PipelineEngine from loader.
+        If get_loader is None, constructs an ExplodingPipelineEngine
+
+        Set up LivePipelineEngine with fixed dates based on today's date.  
+        """
+        if get_loader is not None:
+            self.engine = SimplePipelineEngine(
+                get_loader,
+                self.trading_calendar.all_sessions,# pd DateTimeIndex 1990-01-02 to today
+                self.asset_finder,
+            )
+        else:
+            self.engine = ExplodingPipelineEngine()
+
+        log.info("init_engine done")
+
 
     def initialize(self, *args, **kwargs):
         self._context_persistence_excludes = (list(self.__dict__.keys()) +
@@ -220,3 +245,47 @@ class LiveTradingAlgorithm(TradingAlgorithm):
         if isinstance(order_param, zp.Order):
             order_id = order_param.id
         self.broker.cancel_order(order_id)
+
+    def _run_pipeline(self, pipeline, start_session, chunksize):
+        """
+        Compute `pipeline`, providing values for at least `start_date`.
+
+        Produces a DataFrame containing data for days between `start_date` and
+        `end_date`, where `end_date` is defined by:
+
+            `end_date = min(start_date + chunksize trading days,
+                            simulation_end)`
+
+        Returns
+        -------
+        (data, valid_until) : tuple (pd.DataFrame, pd.Timestamp)
+
+        See Also
+        --------
+        PipelineEngine.run_pipeline
+        """
+        print("***********calling __run_pipeline in LIveTradingAlgo ***************")
+        sessions = self.trading_calendar.all_sessions
+
+        # Load data starting from the previous trading day...
+        start_date_loc = sessions.get_loc(start_session)
+
+        # ...continuing until either the day before the simulation end, or
+        # until chunksize days of data have been loaded.
+        sim_end_session = self.sim_params.end_session
+
+        end_loc = min(
+            start_date_loc + chunksize,
+            sessions.get_loc(sim_end_session)
+        )
+        end_session = sessions[end_loc]
+
+        # end = start + pd.Timedelta('2 day')
+        start_session -= pd.Timedelta('2 day') 
+        end_session -= pd.Timedelta('2 day') 
+
+        print("running pipeline for: ",start_session,end_session)
+
+        return \
+            self.engine.run_pipeline(pipeline, start_session, end_session), \
+            end_session
