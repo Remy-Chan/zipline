@@ -15,6 +15,12 @@ import os.path
 import logbook
 import pandas as pd
 
+# shit added for _pipeline_output
+from pandas.tseries.tools import normalize_date
+from zipline.utils.cache import CachedObject, Expired
+from zipline.utils.compat import exc_clear
+from zipline.utils.pandas_utils import clear_dataframe_indexer_caches
+
 import zipline.protocol as zp
 from zipline.algorithm import TradingAlgorithm
 from zipline.assets._assets import Asset
@@ -246,46 +252,47 @@ class LiveTradingAlgorithm(TradingAlgorithm):
             order_id = order_param.id
         self.broker.cancel_order(order_id)
 
-    def _run_pipeline(self, pipeline, start_session, chunksize):
+    def _pipeline_output(self, pipeline, chunks):
         """
-        Compute `pipeline`, providing values for at least `start_date`.
-
-        Produces a DataFrame containing data for days between `start_date` and
-        `end_date`, where `end_date` is defined by:
-
-            `end_date = min(start_date + chunksize trading days,
-                            simulation_end)`
-
-        Returns
-        -------
-        (data, valid_until) : tuple (pd.DataFrame, pd.Timestamp)
-
-        See Also
-        --------
-        PipelineEngine.run_pipeline
+        Internal implementation of `pipeline_output`.
         """
-        print("***********calling __run_pipeline in LIveTradingAlgo ***************")
-        sessions = self.trading_calendar.all_sessions
+        print("   ****   ****    *****    overridden _pipeline_output()    ***************")
+        today = normalize_date(self.get_datetime() - pd.Timedelta('4 days'))  # should be last trading day
+        data = NO_DATA = object()
+        try:
+            data = self._pipeline_cache.unwrap(today)
+        except Expired:
+            # We can't handle the exception in this block because in Python 3
+            # sys.exc_info isn't cleared until we leave the block.  See note
+            # below for why we need to clear exc_info.
+            pass
 
-        # Load data starting from the previous trading day...
-        start_date_loc = sessions.get_loc(start_session)
+        if data is NO_DATA:
+            # Try to deterministically garbage collect the previous result by
+            # removing any references to it. There are at least three sources
+            # of references:
 
-        # ...continuing until either the day before the simulation end, or
-        # until chunksize days of data have been loaded.
-        sim_end_session = self.sim_params.end_session
+            # 1. self._pipeline_cache holds a reference.
+            # 2. The dataframe itself holds a reference via cached .iloc/.loc
+            #    accessors.
+            # 3. The traceback held in sys.exc_info includes stack frames in
+            #    which self._pipeline_cache is a local variable.
 
-        end_loc = min(
-            start_date_loc + chunksize,
-            sessions.get_loc(sim_end_session)
-        )
-        end_session = sessions[end_loc]
+            # We remove the above sources of references in reverse order:
 
-        # end = start + pd.Timedelta('2 day')
-        start_session -= pd.Timedelta('2 day') 
-        end_session -= pd.Timedelta('2 day') 
+            # 3. Clear the traceback.  This is no-op in Python 3.
+            exc_clear()
 
-        print("running pipeline for: ",start_session,end_session)
+            # 2. Clear the .loc/.iloc caches.
+            clear_dataframe_indexer_caches(
+                self._pipeline_cache._unsafe_get_value()
+            )
 
-        return \
-            self.engine.run_pipeline(pipeline, start_session, end_session), \
-            end_session
+            # 1. Clear the reference to self._pipeline_cache.
+            self._pipeline_cache = None
+
+            # Calculate the next block.
+            data, valid_until = self._run_pipeline(
+                pipeline, today, next(chunks),
+            )
+            self._pipeline_cache = CachedObject(data, valid_until)

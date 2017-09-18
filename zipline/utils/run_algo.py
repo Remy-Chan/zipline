@@ -171,7 +171,10 @@ def _run(handle_data,
     emission_rate = 'daily'
     if broker:
         emission_rate = 'minute'
-        start = pd.Timestamp.utcnow()
+        #start = pd.Timestamp.utcnow()
+        start = pd.Timestamp.utcnow() - pd.Timedelta('4 day')
+        #start = end - pd.Timedelta('1 day')
+        print("starting ts: ",start)
         end = start + pd.Timedelta('2 day')
 
     TradingAlgorithmClass = (partial(LiveTradingAlgorithm,
